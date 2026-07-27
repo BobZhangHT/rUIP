@@ -10,7 +10,7 @@ import pandas as pd
 
 from .data_generation import IntervalCensoredData
 from .evaluation import summarize_chain
-from .priors import UIPSpecification
+from .priors import CommensurateSpecification, UIPSpecification
 from .samplers import SamplerConfig, run_da_sampler
 
 
@@ -32,16 +32,29 @@ def fit_method(
     config: SamplerConfig,
     seed: int,
     uip: UIPSpecification | None = None,
+    commensurate: CommensurateSpecification | None = None,
 ) -> FitResult:
     start = perf_counter()
-    draws = run_da_sampler(data, interval_starts, method, config, np.random.default_rng(seed), uip)
+    draws = run_da_sampler(
+        data,
+        interval_starts,
+        method,
+        config,
+        np.random.default_rng(seed),
+        uip,
+        commensurate,
+    )
     elapsed = perf_counter() - start
+    posterior_uip_mean = float(draws["uip_mean"].mean()) if "uip_mean" in draws else None
+    posterior_uip_information = (
+        float(draws["uip_unit_information"].mean()) if "uip_unit_information" in draws else None
+    )
     return FitResult(
         method=method,
         draws=draws,
         summary=summarize_chain(draws),
         runtime_seconds=float(elapsed),
-        uip_mean=None if uip is None else uip.mean,
-        uip_unit_information=None if uip is None else uip.unit_information,
+        uip_mean=posterior_uip_mean,
+        uip_unit_information=posterior_uip_information,
         m_max=None if uip is None else uip.m_max,
     )

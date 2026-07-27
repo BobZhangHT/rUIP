@@ -11,7 +11,12 @@ experiment:
   baseline_interval_starts: [0.0, 0.6, 1.2, 1.8, 2.4]
   baseline_hazards: [0.45, 0.38, 0.32, 0.27, 0.22]
   weighting: equal
+  weight_dirichlet_concentration: [1.0, 1.0]
   m_max: 80.0
+  commensurate_prior:
+    precision_shape: 0.5
+    precision_rate: 0.05
+    historical_mean_prior_sd: 10.0
 
 sampler:
   iterations: 800
@@ -25,9 +30,9 @@ sampler:
   slice_steps: 80
 
 methods:
-  - NIP-DA
-  - IC-UIP-DA
-  - Full-borrowing
+  - IC-NIP
+  - IC-UIP
+  - IC-CP
 
 scenarios:
   S1_compatible:

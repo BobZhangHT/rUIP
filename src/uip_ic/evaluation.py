@@ -60,6 +60,22 @@ def summarize_chain(draws: pd.DataFrame) -> dict[str, float]:
             m_ess=effective_sample_size(m),
             m_lag1=autocorrelation(m, lag=1),
         )
+    if "commensurate_precision" in draws:
+        precision = draws["commensurate_precision"].to_numpy()
+        result.update(
+            commensurate_precision_mean=float(precision.mean()),
+            commensurate_precision_sd=float(precision.std(ddof=1)),
+            commensurate_precision_ess=effective_sample_size(precision),
+            commensurate_precision_lag1=autocorrelation(precision, lag=1),
+            historical_mean_mean=float(draws["historical_mean"].mean()),
+        )
+    for column in [name for name in draws.columns if name.startswith("weight_")]:
+        values = draws[column].to_numpy()
+        result[f"{column}_mean"] = float(values.mean())
+        result[f"{column}_ess"] = effective_sample_size(values)
+    if "uip_mean" in draws:
+        result["uip_mean_mean"] = float(draws["uip_mean"].mean())
+        result["uip_unit_information_mean"] = float(draws["uip_unit_information"].mean())
     return result
 
 
@@ -98,6 +114,17 @@ def aggregate_simulation(raw: pd.DataFrame) -> pd.DataFrame:
         mean_theta_lag1=("theta_lag1", "mean"),
         mean_runtime_seconds=("runtime_seconds", "mean"),
     ).reset_index()
+    for column in [name for name in clean.columns if name.startswith("weight_") and name.endswith("_mean")]:
+        weight_summary = grouped[column].mean().rename(f"mean_{column}").reset_index()
+        summary = summary.merge(weight_summary, on=["scenario", "method"], how="left")
+    if "commensurate_precision_mean" in clean:
+        cp_summary = (
+            grouped["commensurate_precision_mean"]
+            .mean()
+            .rename("mean_commensurate_precision")
+            .reset_index()
+        )
+        summary = summary.merge(cp_summary, on=["scenario", "method"], how="left")
     failures = raw.groupby(["scenario", "method"], sort=False)["failed"].sum().rename("failures").reset_index()
     return summary.merge(failures, on=["scenario", "method"], how="left")
 
@@ -110,9 +137,16 @@ def audit_results(raw: pd.DataFrame, expected_m_max: float) -> list[str]:
     essential = ["theta_mean", "theta_lower", "theta_upper", "theta_ess", "runtime_seconds"]
     if raw.loc[~raw["failed"].astype(bool), essential].isna().any().any():
         findings.append("FAIL: NaN in an essential successful-fit field")
-    adaptive = raw[raw["method"] == "IC-UIP-DA"]
+    adaptive = raw[raw["method"] == "IC-UIP"]
     if not adaptive.empty and ((adaptive["m_mean"] <= 0) | (adaptive["m_mean"] >= expected_m_max)).any():
         findings.append("FAIL: adaptive posterior mean M is outside its open support")
+    weight_columns = [column for column in adaptive.columns if column.startswith("weight_") and column.endswith("_mean")]
+    if weight_columns:
+        weight_values = adaptive[weight_columns]
+        if ((weight_values <= 0) | (weight_values >= 1)).any().any():
+            findings.append("FAIL: posterior mean UIP weight is outside its open simplex support")
+        if not np.allclose(weight_values.sum(axis=1), 1.0, atol=1e-8):
+            findings.append("FAIL: posterior mean UIP weights do not sum to one")
     if (raw["theta_ess"].dropna() < 10).any():
         findings.append("WARN: at least one theta chain has ESS below 10")
     if (raw["theta_lag1"].dropna().abs() > 0.98).any():
@@ -123,11 +157,15 @@ def audit_results(raw: pd.DataFrame, expected_m_max: float) -> list[str]:
     low_coverage = coverage[coverage < 0.80]
     for (scenario, method), value in low_coverage.items():
         findings.append(f"WARN: low empirical coverage ({value:.3f}) for {method} in {scenario}")
-    adaptive = raw[(raw["method"] == "IC-UIP-DA") & (~raw["failed"].astype(bool))]
+    adaptive = raw[(raw["method"] == "IC-UIP") & (~raw["failed"].astype(bool))]
     if {"S1_compatible", "S3_conflict"}.issubset(set(adaptive["scenario"])):
         mean_m = adaptive.groupby("scenario")["m_mean"].mean()
         if mean_m["S3_conflict"] >= mean_m["S1_compatible"]:
             findings.append("WARN: adaptive mean M did not decrease from compatible to severe-conflict scenarios")
+    if {"weight_1_mean", "weight_2_mean"}.issubset(adaptive.columns):
+        mixed = adaptive[adaptive["scenario"] == "S2_mixed"]
+        if not mixed.empty and mixed["weight_1_mean"].mean() <= mixed["weight_2_mean"].mean():
+            findings.append("WARN: compatible historical study did not receive the larger mean weight in S2")
     if not findings:
         findings.append("PASS: no NaN/Inf, boundary, low-ESS, stuck-chain, or fit-failure flags")
     return findings

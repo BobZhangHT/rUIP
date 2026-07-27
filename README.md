@@ -4,9 +4,9 @@ Reproducible CPU proof-of-concept for Bayesian data augmentation with a unit inf
 
 The repository compares:
 
-- `NIP-DA`: diffuse Normal prior with interval-censored data augmentation;
-- `IC-UIP-DA`: Normal UIP from historical Cox summary statistics, fixed equal study weights, and adaptive continuous borrowing amount `M`;
-- `Full-borrowing`: the same UIP fixed at `M = M_max`, included as a deliberately non-robust comparator.
+- `IC-NIP`: diffuse Normal prior without historical borrowing;
+- `IC-UIP`: Normal UIP from historical Cox summary statistics, dynamically updated study weights, and adaptive continuous borrowing amount `M`;
+- `IC-CP`: a summary-level commensurate-prior comparator motivated by the historical-borrowing literature.
 
 This is a method sanity check, not a publication-level operating-characteristic study. It uses 20 paired repetitions per scenario and short single chains.
 
@@ -19,6 +19,7 @@ This is a method sanity check, not a publication-level operating-characteristic 
 - Gamma-conjugate baseline hazard updates.
 - Stable one-dimensional stepping-out slice updates for treatment and covariate effects.
 - Direct truncated-Gamma update for adaptive `M`.
+- Dirichlet prior and additive-log-ratio slice updates for historical-study weights.
 - Bias, RMSE, 95% CrI coverage and width, borrowing, equivalent ESS, scalar MCMC ESS, lag-1 autocorrelation, timing, figures, logs, and automated audit.
 - Common random numbers across scenarios so that only historical treatment-effect conflict changes within each repetition.
 
@@ -30,15 +31,13 @@ The checked-in results were generated with seed `20260727`, `n=80`, two historic
 
 | Scenario | Method | RMSE | Coverage | Mean CrI width | Mean M |
 | --- | --- | ---: | ---: | ---: | ---: |
-| S1 compatible | NIP-DA | 0.276 | 1.00 | 1.212 | 0.0 |
-| S1 compatible | IC-UIP-DA | 0.195 | 1.00 | 0.984 | 44.1 |
-| S2 mixed | IC-UIP-DA | 0.165 | 1.00 | 0.981 | 41.0 |
-| S3 severe conflict | IC-UIP-DA | 0.246 | 1.00 | 1.191 | 16.5 |
-| S3 severe conflict | Full-borrowing | 0.593 | 0.05 | 0.768 | 80.0 |
+| S1 compatible | IC-NIP | 0.276 | 1.00 | 1.212 | 0.0 |
+| S1 compatible | IC-UIP | 0.192 | 1.00 | 1.000 | 44.2 |
+| S2 mixed | IC-UIP | 0.174 | 1.00 | 1.007 | 41.7 |
+| S3 severe conflict | IC-UIP | 0.252 | 1.00 | 1.187 | 17.1 |
+| S3 severe conflict | IC-CP | 0.244 | 1.00 | 1.219 | NA |
 
-The adaptive mean `M` fell by 62.6% from S1 to S3, and it was lower in S3 than S1 in all 20 paired repetitions. All 180 method fits completed; the minimum treatment-effect ESS was 46.4 and the largest absolute lag-1 autocorrelation was 0.75. The audit deliberately flags the 0.05 severe-conflict coverage of fixed full borrowing.
-
-These numbers support the intended qualitative behavior, but 20 repetitions make coverage estimates very coarse. The shared NIP bias was -0.173 in this fixed simulation batch, so the results should not be read as precise frequentist performance estimates.
+The IC-UIP posterior mean `M` fell by 61.4% from S1 to S3 and decreased in all 20 paired repetitions. In S2 its mean posterior weights were 0.572 for the compatible study and 0.428 for the conflicting study. All 180 fits completed; the minimum treatment-effect ESS was 54.0, the largest absolute lag-1 autocorrelation was 0.67, and the automated audit passed. With only 20 repetitions, coverage estimates remain coarse and should be interpreted as a method sanity check.
 
 See the full [experiment report](reports/small_experiment_report.md), [summary CSV](results/small_simulation_summary.csv), and [audit](results/audit.txt).
 
@@ -86,7 +85,7 @@ papers/SOURCES.md                   Verified local source metadata and use state
 
 ## UIP used in this repository
 
-For historical summaries `(theta_hat_k, SE_k, n_k)` and fixed weights `w_k`,
+For historical summaries `(theta_hat_k, SE_k, n_k)` and dynamically sampled weights `w_k`,
 
 ```text
 I_Uk = 1 / (n_k SE_k^2)
@@ -94,6 +93,7 @@ mu_w = sum_k w_k theta_hat_k
 I_w  = sum_k w_k I_Uk
 theta | M, H ~ Normal(mu_w, 1 / (M I_w))
 M ~ Uniform(0, M_max)
+w ~ Dirichlet(gamma)
 ```
 
 Consequently, `M | theta, H` is a shape-`3/2` Gamma distribution with rate `0.5 I_w (theta - mu_w)^2`, truncated to `(0, M_max)`. This update drives borrowing down when the current treatment effect conflicts with the historical weighted mean.
@@ -102,6 +102,6 @@ The reported equivalent ESS is diagnostic only. It divides posterior mean prior 
 
 ## References and integrity
 
-The two user-provided PDFs were checked locally. Their titles, DOI, hashes, source locations, and exact roles are documented in [papers/SOURCES.md](papers/SOURCES.md). PDF full text is ignored by Git and is not redistributed.
+The two user-provided PDFs were checked locally. Their titles, DOI, hashes, and exact roles are documented in [papers/SOURCES.md](papers/SOURCES.md). The broader comparison is documented in [the literature search report](literature-search-20260727-interval-censored-borrowing/papers.md). PDF full text is ignored by Git and is not redistributed.
 
 No result is hard-coded into the experiment scripts. Tables, figures, diagnostics, audit messages, and the report are generated from the saved run outputs. Users should review the code and numerical claims before using this work in a manuscript, and follow the journal or institution's current AI-disclosure policy.

@@ -48,12 +48,16 @@ def successful_row(
     current_unit_information: float,
 ) -> dict[str, float | str | int | bool]:
     summary = result.summary
-    m_mean = summary.get("m_mean", 0.0)
+    m_mean = summary.get("m_mean", np.nan)
     prior_precision = 0.0
-    if result.uip_unit_information is not None:
-        prior_precision = m_mean * result.uip_unit_information
+    if {"m", "uip_unit_information"}.issubset(result.draws.columns):
+        prior_precision = float(
+            (result.draws["m"] * result.draws["uip_unit_information"]).mean()
+        )
+    elif "commensurate_precision" in result.draws:
+        prior_precision = float(result.draws["commensurate_precision"].mean())
     equivalent_ess = prior_precision / current_unit_information if current_unit_information > 0 else np.nan
-    return {
+    row = {
         "scenario": scenario,
         "repetition": repetition,
         "method": result.method,
@@ -67,7 +71,7 @@ def successful_row(
         "covered": float(summary["theta_lower"] <= theta_true <= summary["theta_upper"]),
         "cri_width": summary["theta_upper"] - summary["theta_lower"],
         "m_mean": m_mean,
-        "m_sd": summary.get("m_sd", 0.0),
+        "m_sd": summary.get("m_sd", np.nan),
         "prior_precision": prior_precision,
         "current_unit_information": current_unit_information,
         "equivalent_ess": equivalent_ess,
@@ -79,9 +83,15 @@ def successful_row(
         "uip_mean": result.uip_mean,
         "uip_unit_information": result.uip_unit_information,
         "m_max": result.m_max,
+        "commensurate_precision_mean": summary.get("commensurate_precision_mean", np.nan),
+        "commensurate_precision_ess": summary.get("commensurate_precision_ess", np.nan),
         "failed": False,
         "error": "",
     }
+    for name, value in summary.items():
+        if name.startswith("weight_"):
+            row[name] = value
+    return row
 
 
 def failure_row(scenario: str, repetition: int, method: str, theta_true: float, error: Exception) -> dict:
@@ -111,6 +121,12 @@ def failure_row(scenario: str, repetition: int, method: str, theta_true: float, 
         "uip_mean": np.nan,
         "uip_unit_information": np.nan,
         "m_max": np.nan,
+        "commensurate_precision_mean": np.nan,
+        "commensurate_precision_ess": np.nan,
+        "weight_1_mean": np.nan,
+        "weight_1_ess": np.nan,
+        "weight_2_mean": np.nan,
+        "weight_2_ess": np.nan,
         "failed": True,
         "error": repr(error),
     }
@@ -120,7 +136,11 @@ def save_plots(summary: pd.DataFrame, raw: pd.DataFrame) -> None:
     set_plot_style()
     methods = list(dict.fromkeys(summary["method"]))
     scenarios = list(dict.fromkeys(summary["scenario"]))
-    colors = {"NIP-DA": "#4C78A8", "IC-UIP-DA": "#59A14F", "Full-borrowing": "#E15759"}
+    colors = {
+        "IC-NIP": "#4C78A8",
+        "IC-UIP": "#59A14F",
+        "IC-CP": "#B279A2",
+    }
     metrics = [
         ("bias", "Bias", 0.0),
         ("rmse", "RMSE", None),
@@ -129,11 +149,12 @@ def save_plots(summary: pd.DataFrame, raw: pd.DataFrame) -> None:
     ]
     figure, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
     x = np.arange(len(scenarios))
-    width = 0.24
+    width = 0.19
     for axis, (column, label, reference) in zip(axes.ravel(), metrics):
         for index, method in enumerate(methods):
             method_data = summary[summary["method"] == method].set_index("scenario").reindex(scenarios)
-            axis.bar(x + (index - 1) * width, method_data[column], width, label=method, color=colors[method])
+            offset = (index - (len(methods) - 1) / 2.0) * width
+            axis.bar(x + offset, method_data[column], width, label=method, color=colors[method])
         if reference is not None:
             axis.axhline(reference, color="black", linestyle="--", linewidth=1)
         axis.set_title(label)
@@ -143,15 +164,15 @@ def save_plots(summary: pd.DataFrame, raw: pd.DataFrame) -> None:
     figure.savefig(REPOSITORY / "results" / "figures" / "method_comparison.png", bbox_inches="tight")
     plt.close(figure)
 
-    borrowing = raw[(raw["method"].isin(["IC-UIP-DA", "Full-borrowing"])) & (~raw["failed"])]
+    borrowing = raw[(raw["method"].isin(["IC-UIP", "IC-CP"])) & (~raw["failed"])]
     figure, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
-    for method in ["IC-UIP-DA", "Full-borrowing"]:
-        values = [borrowing[(borrowing["scenario"] == scenario) & (borrowing["method"] == method)]["m_mean"] for scenario in scenarios]
-        positions = x + (-0.10 if method == "IC-UIP-DA" else 0.10)
-        means = [value.mean() for value in values]
-        axes[0].plot(positions, means, marker="o", linewidth=2, label=method, color=colors[method])
-        for position, value in zip(positions, values):
-            axes[0].scatter(np.repeat(position, len(value)), value, s=10, alpha=0.35, color=colors[method])
+    values = [borrowing[(borrowing["scenario"] == scenario) & (borrowing["method"] == "IC-UIP")]["m_mean"] for scenario in scenarios]
+    means = [value.mean() for value in values]
+    axes[0].plot(x, means, marker="o", linewidth=2, label="IC-UIP", color=colors["IC-UIP"])
+    for position, value in zip(x, values):
+        axes[0].scatter(np.repeat(position, len(value)), value, s=10, alpha=0.35, color=colors["IC-UIP"])
+    for method_index, method in enumerate(["IC-UIP", "IC-CP"]):
+        positions = x + (method_index - 0.5) * 0.08
         ess_means = [
             borrowing[(borrowing["scenario"] == scenario) & (borrowing["method"] == method)]["equivalent_ess"].mean()
             for scenario in scenarios
@@ -165,6 +186,24 @@ def save_plots(summary: pd.DataFrame, raw: pd.DataFrame) -> None:
         axis.set_xticks(x, [item.replace("_", "\n") for item in scenarios])
         axis.legend(frameon=False)
     figure.savefig(REPOSITORY / "results" / "figures" / "borrowing_adaptation.png", bbox_inches="tight")
+    plt.close(figure)
+
+    adaptive = raw[(raw["method"] == "IC-UIP") & (~raw["failed"])]
+    figure, axis = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
+    for study_index, color in [(1, "#59A14F"), (2, "#F28E2B")]:
+        column = f"weight_{study_index}_mean"
+        means = [adaptive[adaptive["scenario"] == scenario][column].mean() for scenario in scenarios]
+        axis.plot(x, means, marker="o", linewidth=2, color=color, label=f"Historical study H{study_index}")
+        for position, scenario in zip(x, scenarios):
+            values = adaptive[adaptive["scenario"] == scenario][column]
+            axis.scatter(np.repeat(position, len(values)), values, s=12, alpha=0.3, color=color)
+    axis.axhline(0.5, color="black", linestyle="--", linewidth=1)
+    axis.set_ylim(0, 1)
+    axis.set_ylabel("Posterior mean weight")
+    axis.set_title("Dynamic IC-UIP historical-study weights")
+    axis.set_xticks(x, [item.replace("_", "\n") for item in scenarios])
+    axis.legend(frameon=False)
+    figure.savefig(REPOSITORY / "results" / "figures" / "dynamic_weights.png", bbox_inches="tight")
     plt.close(figure)
 
 
@@ -184,60 +223,67 @@ def markdown_table(frame: pd.DataFrame) -> str:
 
 def write_report(config: dict, sampler_values: dict, summary: pd.DataFrame, audit: list[str]) -> None:
     display_columns = [
-        "scenario",
-        "method",
-        "repetitions",
-        "bias",
-        "rmse",
-        "coverage",
-        "mean_cri_width",
-        "mean_m",
-        "mean_equivalent_ess",
-        "median_theta_ess",
+        "scenario", "method", "repetitions", "bias", "rmse", "coverage",
+        "mean_cri_width", "mean_m", "mean_equivalent_ess", "median_theta_ess",
         "failures",
     ]
-    table = markdown_table(summary[display_columns])
+    for optional in ["mean_weight_1_mean", "mean_weight_2_mean"]:
+        if optional in summary:
+            display_columns.append(optional)
+    display = summary[display_columns].rename(
+        columns={"mean_weight_1_mean": "mean_w1", "mean_weight_2_mean": "mean_w2"}
+    )
+    table = markdown_table(display)
     experiment = config["experiment"]
     indexed = summary.set_index(["scenario", "method"])
-    nip_s1 = indexed.loc[("S1_compatible", "NIP-DA")]
-    uip_s1 = indexed.loc[("S1_compatible", "IC-UIP-DA")]
-    uip_s3 = indexed.loc[("S3_conflict", "IC-UIP-DA")]
-    full_s3 = indexed.loc[("S3_conflict", "Full-borrowing")]
+    nip_s1 = indexed.loc[("S1_compatible", "IC-NIP")]
+    uip_s1 = indexed.loc[("S1_compatible", "IC-UIP")]
+    uip_s2 = indexed.loc[("S2_mixed", "IC-UIP")]
+    uip_s3 = indexed.loc[("S3_conflict", "IC-UIP")]
+    cp_s3 = indexed.loc[("S3_conflict", "IC-CP")]
     m_reduction = 100.0 * (1.0 - uip_s3["mean_m"] / uip_s1["mean_m"])
+    audit_text = "\n".join(f"- {item}" for item in audit)
     report = f"""# Small IC-UIP proof-of-concept experiment
 
 ## Scope and model
 
-This report records the outputs produced by `scripts/run_small_simulation.py`; no table entry was entered manually. Current data follow a piecewise-exponential proportional-hazards model,
+This report is regenerated from `scripts/run_small_simulation.py`; no result is manually entered. Current interval-censored data follow
 
 $$h_i(t)=\\lambda_0(t)\\exp(\\theta Z_i+\\beta X_i),$$
 
-and are observed only through $(L_i,R_i]$. The last baseline interval extends to infinity. Historical studies are generated as exact/right-censored PH data, converted to Cox summaries $(\\hat\\theta_k,SE_k,n_k)$, and then discarded by the current analysis.
+with a piecewise-constant baseline hazard whose last interval extends to infinity. Historical studies are converted to Cox summaries $(\\hat\\theta_k,SE_k,n_k)$; current analyses never receive historical patient-level observations.
 
-For fixed equal weights, $\\mu_w=\\sum_k w_k\\hat\\theta_k$, $I_w=\\sum_k w_k/(n_kSE_k^2)$, and
+For IC-UIP,
 
-$$\\theta\\mid M,\\mathcal H\\sim N(\\mu_w,(MI_w)^{{-1}}),\\qquad M\\sim U(0,M_{{max}}).$$
+$$\\mu_w=\\sum_k w_k\\hat\\theta_k,\\quad I_w=\\sum_k\\frac{{w_k}}{{n_kSE_k^2}},\\quad \\theta\\mid M,w,\\mathcal H\\sim N(\\mu_w,(MI_w)^{{-1}}).$$
 
-Finite latent failure times are drawn by inversion inside their observed intervals. Given latent failures, baseline hazards have
+Weights are no longer fixed: $w\\sim Dirichlet(\\gamma)$ and their conditional density is
 
-$$\\lambda_j\\mid-\\sim Gamma\\left(a_0+D_j,\\ b_0+\\sum_i e^{{\\theta Z_i+\\beta X_i}}Y_{{ij}}\\right).$$
+$$p(w\\mid-)\\propto\\prod_k w_k^{{\\gamma_k-1}}I_w^{{1/2}}\\exp\\left[-\\tfrac12MI_w(\\theta-\\mu_w)^2\\right].$$
 
-The scalar regression updates use a stepping-out slice sampler. This is the only nonstandard-conjugate step. For adaptive UIP,
+The implementation samples additive-log-ratio coordinates one at a time by slice sampling, including the softmax Jacobian. Adaptive $M$ retains the direct truncated-Gamma update
 
-$$M\\mid-\\sim Gamma\\left(3/2,\\tfrac12 I_w(\\theta-\\mu_w)^2\\right)I(0<M<M_{{max}}).$$
+$$M\\mid-\\sim Gamma\\left(3/2,\\tfrac12I_w(\\theta-\\mu_w)^2\\right)I(0<M<M_{{max}}).$$
 
-## Fixed experiment settings
+`IC-CP` is a summary-level commensurate comparator:
 
-- Random seed: `{experiment['seed']}`
-- Current sample size: `{experiment['n_current']}`; each historical sample size: `{experiment['n_historical']}`
-- True current log-HR: `{experiment['theta_current']:.6f}`; covariate coefficient: `{experiment['beta_true']}`
-- Repetitions per scenario: `{summary['repetitions'].max()}` successful runs intended from `{config['experiment']['repetitions']}` configured runs
-- MCMC: `{sampler_values['iterations']}` iterations, `{sampler_values['burn_in']}` burn-in, thinning `{sampler_values['thin']}`
-- Methods: NIP-DA, adaptive IC-UIP-DA, and fixed-$M_{{max}}$ full-borrowing UIP
-- Fixed weights: `{experiment['weighting']}`; $M_{{max}}={experiment['m_max']}$
-- Common random numbers: within each repetition, current data, underlying historical random draws, and method-level MCMC streams are shared across scenarios; only the historical treatment effects change.
+$$\\hat\\theta_k\\mid\\theta_H\\sim N(\\theta_H,SE_k^2),\\quad \\theta\\mid\\theta_H,\\tau\\sim N(\\theta_H,\\tau^{{-1}}),\\quad \\tau\\sim Gamma(0.5,0.05).$$
 
-The equivalent ESS is a diagnostic, not a design calibration: current per-subject information is approximated by $1/(n\\,Var_{{NIP}}(\\theta\\mid D))$, and prior precision is divided by this quantity.
+It preserves the repository's summary-only constraint. It is not the matched individual-level random-effects model of Fang et al. (2025).
+
+Finite latent failures are sampled by exact inversion within $(L_i,R_i]$. Baseline hazards have Gamma full conditionals. Regression coefficients and UIP weight coordinates use one-dimensional stepping-out slice updates; $M$, $\\theta_H$, and $\\tau$ have direct standard-distribution updates.
+
+## Experiment settings
+
+- Seed `{experiment['seed']}`; current $n={experiment['n_current']}$; each historical $n_k={experiment['n_historical']}$.
+- True current log-HR `{experiment['theta_current']:.6f}`; covariate coefficient `{experiment['beta_true']}`.
+- `{summary['repetitions'].max()}` paired repetitions per scenario.
+- `{sampler_values['iterations']}` iterations, `{sampler_values['burn_in']}` burn-in, thinning `{sampler_values['thin']}`.
+- Methods: `IC-NIP`, `IC-UIP`, and the literature-motivated `IC-CP` comparator.
+- UIP weight prior: $Dirichlet({experiment['weight_dirichlet_concentration']})$; $M_{{max}}={experiment['m_max']}$.
+- Common random numbers are shared across scenarios within each repetition; only historical effects change.
+
+Equivalent ESS remains a diagnostic: posterior borrowing precision is divided by $1/[n\\,Var_{{IC-NIP}}(\\theta\\mid D)]$.
 
 ## Results
 
@@ -247,26 +293,33 @@ The equivalent ESS is a diagnostic, not a design calibration: current per-subjec
 
 ![Borrowing adaptation](../results/figures/borrowing_adaptation.png)
 
+![Dynamic weights](../results/figures/dynamic_weights.png)
+
 ## Automated audit
 
-""" + "\n".join(f"- {item}" for item in audit) + """
+{audit_text}
 
 ## Interpretation
 
-This small experiment is a computational and qualitative check, not a definitive operating-characteristic study. In S1, adaptive IC-UIP-DA reduced RMSE from `{nip_s1['rmse']:.3f}` to `{uip_s1['rmse']:.3f}` and mean interval width from `{nip_s1['mean_cri_width']:.3f}` to `{uip_s1['mean_cri_width']:.3f}`. Its mean $M$ fell from `{uip_s1['mean_m']:.3f}` in S1 to `{uip_s3['mean_m']:.3f}` in S3, a `{m_reduction:.1f}%` reduction. The adaptive method retained S3 empirical coverage `{uip_s3['coverage']:.3f}` in these 20 paired repetitions, while fixed full borrowing had bias `{full_s3['bias']:.3f}` and coverage `{full_s3['coverage']:.3f}`. These results support the intended qualitative behavior: useful precision gain under compatibility and substantial down-weighting under severe conflict.
+In S1, IC-UIP changed RMSE from `{nip_s1['rmse']:.3f}` under IC-NIP to `{uip_s1['rmse']:.3f}` and mean CrI width from `{nip_s1['mean_cri_width']:.3f}` to `{uip_s1['mean_cri_width']:.3f}`. Mean $M$ decreased from `{uip_s1['mean_m']:.3f}` in S1 to `{uip_s3['mean_m']:.3f}` in S3, a `{m_reduction:.1f}%` reduction. In S2, the posterior mean weights were `w1={uip_s2.get('mean_weight_1_mean', np.nan):.3f}` and `w2={uip_s2.get('mean_weight_2_mean', np.nan):.3f}`, where H1 is the compatible study.
 
-The shared NIP estimate has bias `{nip_s1['bias']:.3f}` and coverage `{nip_s1['coverage']:.3f}` in only 20 current datasets. This finite-repetition result, and all coverage values in the table, are too coarse for publication-level operating-characteristic claims.
+Under S3, IC-UIP had RMSE `{uip_s3['rmse']:.3f}` and coverage `{uip_s3['coverage']:.3f}`; IC-CP had RMSE `{cp_s3['rmse']:.3f}` and coverage `{cp_s3['coverage']:.3f}`. These `{int(summary['repetitions'].max())}`-repetition values are qualitative checks, not publication-level operating characteristics.
 
-## Current limitations and next steps
+## Literature positioning
 
-1. Only the PH model is implemented; proportional-odds transformation models require the Gamma-frailty layer.
-2. Historical weights are fixed and equal; dynamic simplex weights are not sampled.
-3. Equivalent ESS is posterior-diagnostic. A prospective interval-censoring-design Fisher-information calibration remains to be implemented.
-4. Historical summaries use exact/right-censored Cox fits rather than an interval-censored NPMLE/EM analysis.
-5. The sampler uses one chain per generated dataset and short CPU-budget chains. A full study should add multiple chains, rank-normalized $\\hat R$, longer runs, and substantially more repetitions.
-6. A direct NPMLE/EM benchmark and comparison with power/commensurate priors remain future work.
+The closest direct work is Fang et al. (2025), which uses commensurate priors and random effects for matched interval-censored current and historical controls. Murray et al. (2014) provides the right-censored semiparametric commensurate-survival precursor. Gu and Yin (2024) develop a unit-information Dirichlet-process prior for survival distributions, but not this interval-censored regression-effect setting. The reusable search report is in `literature-search-20260727-interval-censored-borrowing/`.
 
-See `papers/SOURCES.md` for the two user-provided source documents and the exact role each played.
+## Limitations and next steps
+
+1. Only PH is implemented; PO/general transformation models require the Gamma-frailty layer.
+2. Dynamic weights learn through the treatment-effect UIP kernel; study-level covariate/design discrepancies are not separately modeled.
+3. IC-CP is a summary-normal comparator, not a reproduction of Fang et al.'s matched individual-level model.
+4. Historical summaries use exact/right-censored Cox fits rather than interval-censored NPMLE/EM fits.
+5. Equivalent ESS is posterior-diagnostic rather than prospective IC-design calibration.
+6. Short single chains and 20 repetitions are insufficient for final type-I-error or coverage claims.
+7. Direct IntCens NPMLE/EM, individual-level Fang-style CP, robust MAP, and normalized power-prior comparisons remain larger follow-up tasks.
+
+See `papers/SOURCES.md` and the literature-search folder for traceable sources and scope cautions.
 """
     (REPOSITORY / "reports" / "small_experiment_report.md").write_text(report, encoding="utf-8")
 
@@ -313,7 +366,8 @@ def main() -> None:
                         "n": item.n,
                         "unit_information": item.unit_information,
                         "event_fraction": float(inputs.histories[index].event.mean()),
-                        "uip_weight": inputs.uip.weights[index],
+                        "initial_uip_weight": inputs.uip.weights[index],
+                        "dirichlet_concentration": inputs.uip.dirichlet_concentration[index],
                     }
                 )
 
@@ -329,14 +383,15 @@ def main() -> None:
                         inputs.baseline.interval_starts,
                         sampler,
                         seed,
-                        None if method == "NIP-DA" else inputs.uip,
+                        inputs.uip if method == "IC-UIP" else None,
+                        inputs.commensurate if method == "IC-CP" else None,
                     )
                 except Exception as error:
                     errors[method] = error
                     logger.exception("fit failed: scenario=%s repetition=%d method=%s", scenario, repetition, method)
 
-            if "NIP-DA" in fitted:
-                nip_variance = float(fitted["NIP-DA"].draws["theta"].var(ddof=1))
+            if "IC-NIP" in fitted:
+                nip_variance = float(fitted["IC-NIP"].draws["theta"].var(ddof=1))
                 current_unit_information = 1.0 / (inputs.current.n * nip_variance)
             else:
                 current_unit_information = np.nan
@@ -367,6 +422,9 @@ def main() -> None:
             "theta_lag1",
             "m_ess",
             "m_lag1",
+            "commensurate_precision_ess",
+            "weight_1_ess",
+            "weight_2_ess",
             "runtime_seconds",
             "failed",
             "error",

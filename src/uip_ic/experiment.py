@@ -14,7 +14,13 @@ from .data_generation import (
     generate_interval_censored_data,
 )
 from .interval_ph import PiecewiseBaseline
-from .priors import HistoricalSummary, UIPSpecification, build_uip
+from .priors import (
+    CommensurateSpecification,
+    HistoricalSummary,
+    UIPSpecification,
+    build_commensurate_prior,
+    build_uip,
+)
 from .samplers import SamplerConfig
 from .utils import derived_seed
 
@@ -25,6 +31,7 @@ class ReplicateInputs:
     histories: tuple[ExactSurvivalData, ...]
     historical_summaries: tuple[HistoricalSummary, ...]
     uip: UIPSpecification
+    commensurate: CommensurateSpecification
     baseline: PiecewiseBaseline
     theta_true: float
     historical_truths: np.ndarray
@@ -81,12 +88,21 @@ def simulate_replicate(
         summaries,
         float(experiment["m_max"]),
         str(experiment.get("weighting", "equal")),
+        dirichlet_concentration=experiment.get("weight_dirichlet_concentration"),
+    )
+    cp = experiment.get("commensurate_prior", {})
+    commensurate = build_commensurate_prior(
+        summaries,
+        float(cp.get("precision_shape", 0.5)),
+        float(cp.get("precision_rate", 0.05)),
+        float(cp.get("historical_mean_prior_sd", 10.0)),
     )
     return ReplicateInputs(
         current=current,
         histories=tuple(histories),
         historical_summaries=tuple(summaries),
         uip=uip,
+        commensurate=commensurate,
         baseline=baseline,
         theta_true=theta_true,
         historical_truths=historical_truths,

@@ -30,9 +30,48 @@ class UIPSpecification:
     weights: np.ndarray
     m_max: float
     summaries: tuple[HistoricalSummary, ...]
+    dirichlet_concentration: np.ndarray
 
     def precision(self, m: float) -> float:
         return float(m * self.unit_information)
+
+    def reweight(self, weights: Sequence[float]) -> "UIPSpecification":
+        updated = np.asarray(weights, dtype=float)
+        if updated.shape != self.weights.shape or np.any(updated <= 0) or not np.isfinite(updated).all():
+            raise ValueError("dynamic UIP weights must be finite and strictly positive")
+        updated = updated / updated.sum()
+        theta = np.asarray([item.theta_hat for item in self.summaries], dtype=float)
+        unit = np.asarray([item.unit_information for item in self.summaries], dtype=float)
+        return UIPSpecification(
+            mean=float(updated @ theta),
+            unit_information=float(updated @ unit),
+            weights=updated,
+            m_max=self.m_max,
+            summaries=self.summaries,
+            dirichlet_concentration=self.dirichlet_concentration,
+        )
+
+
+@dataclass(frozen=True)
+class CommensurateSpecification:
+    """Normal-summary commensurate prior used as a lightweight comparator."""
+
+    summaries: tuple[HistoricalSummary, ...]
+    precision_shape: float = 0.5
+    precision_rate: float = 0.05
+    historical_mean_prior_sd: float = 10.0
+
+    def validate(self) -> None:
+        if not self.summaries:
+            raise ValueError("commensurate prior needs at least one historical summary")
+        if min(self.precision_shape, self.precision_rate, self.historical_mean_prior_sd) <= 0:
+            raise ValueError("commensurate-prior hyperparameters must be positive")
+
+    @property
+    def initial_historical_mean(self) -> float:
+        precision = np.asarray([1.0 / item.se**2 for item in self.summaries], dtype=float)
+        estimates = np.asarray([item.theta_hat for item in self.summaries], dtype=float)
+        return float(precision @ estimates / precision.sum())
 
 
 def build_uip(
@@ -40,6 +79,7 @@ def build_uip(
     m_max: float,
     weighting: str = "equal",
     preset_weights: Sequence[float] | None = None,
+    dirichlet_concentration: Sequence[float] | None = None,
 ) -> UIPSpecification:
     values = tuple(summaries)
     if not values:
@@ -60,6 +100,13 @@ def build_uip(
     if weights.sum() <= 0:
         raise ValueError("UIP weights must have positive sum")
     weights = weights / weights.sum()
+    concentration = (
+        np.ones(len(values), dtype=float)
+        if dirichlet_concentration is None
+        else np.asarray(dirichlet_concentration, dtype=float)
+    )
+    if concentration.shape != (len(values),) or np.any(concentration <= 0) or not np.isfinite(concentration).all():
+        raise ValueError("Dirichlet concentrations must be finite and strictly positive")
     theta = np.asarray([item.theta_hat for item in values], dtype=float)
     return UIPSpecification(
         mean=float(weights @ theta),
@@ -67,6 +114,57 @@ def build_uip(
         weights=weights,
         m_max=float(m_max),
         summaries=values,
+        dirichlet_concentration=concentration,
+    )
+
+
+def build_commensurate_prior(
+    summaries: Sequence[HistoricalSummary],
+    precision_shape: float = 0.5,
+    precision_rate: float = 0.05,
+    historical_mean_prior_sd: float = 10.0,
+) -> CommensurateSpecification:
+    specification = CommensurateSpecification(
+        tuple(summaries),
+        float(precision_shape),
+        float(precision_rate),
+        float(historical_mean_prior_sd),
+    )
+    specification.validate()
+    return specification
+
+
+def alr_to_simplex(log_ratios: Sequence[float]) -> np.ndarray:
+    """Map additive log-ratios to an open simplex with the last weight as reference."""
+    values = np.append(np.asarray(log_ratios, dtype=float), 0.0)
+    shifted = values - np.max(values)
+    weights = np.exp(shifted)
+    return weights / weights.sum()
+
+
+def simplex_to_alr(weights: Sequence[float]) -> np.ndarray:
+    values = np.asarray(weights, dtype=float)
+    if values.ndim != 1 or values.size == 0 or np.any(values <= 0) or not np.isfinite(values).all():
+        raise ValueError("weights must lie in the open simplex")
+    values = values / values.sum()
+    return np.log(values[:-1] / values[-1])
+
+
+def uip_weight_log_density(
+    log_ratios: Sequence[float],
+    theta: float,
+    m: float,
+    uip: UIPSpecification,
+) -> float:
+    """Log density in ALR coordinates, including the softmax Jacobian."""
+    weights = alr_to_simplex(log_ratios)
+    candidate = uip.reweight(weights)
+    # Dirichlet(w | gamma) times |d w / d ALR| = product w_k**gamma_k.
+    log_dirichlet_and_jacobian = float(uip.dirichlet_concentration @ np.log(weights))
+    return (
+        log_dirichlet_and_jacobian
+        + 0.5 * np.log(candidate.unit_information)
+        - 0.5 * m * candidate.unit_information * (theta - candidate.mean) ** 2
     )
 
 

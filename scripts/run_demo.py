@@ -50,7 +50,8 @@ def main() -> None:
             inputs.baseline.interval_starts,
             sampler,
             seed,
-            None if method == "NIP-DA" else inputs.uip,
+            inputs.uip if method == "IC-UIP" else None,
+            inputs.commensurate if method == "IC-CP" else None,
         )
         rows.append({"scenario": args.scenario, "method": method, **result.summary, "runtime_seconds": result.runtime_seconds})
 
@@ -66,6 +67,8 @@ def main() -> None:
                 "se": item.se,
                 "n": item.n,
                 "unit_information": item.unit_information,
+                "initial_uip_weight": inputs.uip.weights[index],
+                "dirichlet_concentration": inputs.uip.dirichlet_concentration[index],
             }
             for index, item in enumerate(inputs.historical_summaries)
         ]

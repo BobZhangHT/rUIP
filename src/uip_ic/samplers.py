@@ -16,7 +16,14 @@ from .augmentation import (
 )
 from .data_generation import IntervalCensoredData
 from .interval_ph import PiecewiseBaseline
-from .priors import UIPSpecification, sample_truncated_gamma_m
+from .priors import (
+    CommensurateSpecification,
+    UIPSpecification,
+    alr_to_simplex,
+    sample_truncated_gamma_m,
+    simplex_to_alr,
+    uip_weight_log_density,
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,29 @@ def slice_sample(
     raise RuntimeError("slice sampler failed to accept after 1000 shrinkage steps")
 
 
+def update_uip_weights(
+    uip: UIPSpecification,
+    theta: float,
+    m: float,
+    log_ratios: np.ndarray,
+    rng: np.random.Generator,
+    width: float = 1.0,
+    max_steps: int = 80,
+) -> tuple[UIPSpecification, np.ndarray]:
+    """Update all additive-log-ratio coordinates by conditional slice sampling."""
+    updated = np.asarray(log_ratios, dtype=float).copy()
+    for coordinate in range(updated.size):
+        def log_density(value: float) -> float:
+            proposal = updated.copy()
+            proposal[coordinate] = value
+            return uip_weight_log_density(proposal, theta, m, uip)
+
+        updated[coordinate] = slice_sample(
+            updated[coordinate], log_density, rng, width=width, max_steps=max_steps
+        )
+    return uip.reweight(alr_to_simplex(updated)), updated
+
+
 def run_da_sampler(
     data: IntervalCensoredData,
     interval_starts: np.ndarray,
@@ -85,13 +115,16 @@ def run_da_sampler(
     config: SamplerConfig,
     rng: np.random.Generator,
     uip: UIPSpecification | None = None,
+    commensurate: CommensurateSpecification | None = None,
 ) -> pd.DataFrame:
     config.validate()
-    allowed = {"NIP-DA", "IC-UIP-DA", "Full-borrowing"}
+    allowed = {"IC-NIP", "IC-UIP", "IC-CP"}
     if method not in allowed:
         raise ValueError(f"method must be one of {sorted(allowed)}")
-    if method != "NIP-DA" and uip is None:
+    if method == "IC-UIP" and uip is None:
         raise ValueError("UIP methods require a UIP specification")
+    if method == "IC-CP" and commensurate is None:
+        raise ValueError("IC-CP requires a commensurate-prior specification")
 
     starts = np.asarray(interval_starts, dtype=float)
     latent = initialize_latent_times(data)
@@ -101,7 +134,16 @@ def run_da_sampler(
     hazards = (counts + config.baseline_prior_shape) / (
         exposure.sum(axis=0) + config.baseline_prior_rate
     )
-    m = 0.0 if method == "NIP-DA" else (uip.m_max if method == "Full-borrowing" else 0.5 * uip.m_max)
+    current_uip = uip
+    weight_log_ratios = None if uip is None else simplex_to_alr(uip.weights)
+    if method == "IC-UIP":
+        m = 0.5 * uip.m_max
+    else:
+        m = 0.0
+    historical_mean = None if commensurate is None else commensurate.initial_historical_mean
+    commensurate_precision = (
+        None if commensurate is None else commensurate.precision_shape / commensurate.precision_rate
+    )
     records: list[dict[str, float]] = []
 
     def complete_loglik(theta_value: float, beta_value: float, integrated: np.ndarray) -> float:
@@ -128,10 +170,12 @@ def run_da_sampler(
 
         def theta_log_density(value: float) -> float:
             likelihood = complete_loglik(value, beta, integrated)
-            if method == "NIP-DA":
+            if method == "IC-NIP":
                 return likelihood - 0.5 * (value / config.theta_nip_sd) ** 2
-            precision = uip.precision(m)
-            return likelihood - 0.5 * precision * (value - uip.mean) ** 2
+            if method == "IC-CP":
+                return likelihood - 0.5 * commensurate_precision * (value - historical_mean) ** 2
+            precision = current_uip.precision(m)
+            return likelihood - 0.5 * precision * (value - current_uip.mean) ** 2
 
         theta = slice_sample(theta, theta_log_density, rng, config.slice_width, config.slice_steps)
 
@@ -141,11 +185,58 @@ def run_da_sampler(
 
         beta = slice_sample(beta, beta_log_density, rng, config.slice_width, config.slice_steps)
 
-        if method == "IC-UIP-DA":
-            m = sample_truncated_gamma_m(rng, theta, uip)
+        if method == "IC-UIP":
+            current_uip, weight_log_ratios = update_uip_weights(
+                current_uip,
+                theta,
+                m,
+                weight_log_ratios,
+                rng,
+                width=config.slice_width,
+                max_steps=config.slice_steps,
+            )
+        if method == "IC-UIP":
+            m = sample_truncated_gamma_m(rng, theta, current_uip)
+        elif method == "IC-CP":
+            historical_precision = np.asarray(
+                [1.0 / item.se**2 for item in commensurate.summaries], dtype=float
+            )
+            historical_estimates = np.asarray(
+                [item.theta_hat for item in commensurate.summaries], dtype=float
+            )
+            prior_precision = 1.0 / commensurate.historical_mean_prior_sd**2
+            posterior_precision = historical_precision.sum() + commensurate_precision + prior_precision
+            posterior_mean = (
+                historical_precision @ historical_estimates + commensurate_precision * theta
+            ) / posterior_precision
+            historical_mean = rng.normal(posterior_mean, np.sqrt(1.0 / posterior_precision))
+            commensurate_precision = rng.gamma(
+                commensurate.precision_shape + 0.5,
+                1.0
+                / (
+                    commensurate.precision_rate
+                    + 0.5 * (theta - historical_mean) ** 2
+                ),
+            )
 
         if iteration >= config.burn_in and (iteration - config.burn_in) % config.thin == 0:
-            row = {"iteration": float(iteration + 1), "theta": theta, "beta": beta, "m": m}
+            row = {"iteration": float(iteration + 1), "theta": theta, "beta": beta}
+            if method == "IC-NIP":
+                row["m"] = 0.0
+            elif method == "IC-UIP":
+                row.update(
+                    m=m,
+                    uip_mean=current_uip.mean,
+                    uip_unit_information=current_uip.unit_information,
+                )
+                row.update(
+                    {f"weight_{index + 1}": float(value) for index, value in enumerate(current_uip.weights)}
+                )
+            else:
+                row.update(
+                    commensurate_precision=float(commensurate_precision),
+                    historical_mean=float(historical_mean),
+                )
             row.update({f"lambda_{j + 1}": float(value) for j, value in enumerate(hazards)})
             records.append(row)
 
