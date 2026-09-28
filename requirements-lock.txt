@@ -1,0 +1,13 @@
+# Final reviewed Python environment for the reproducibility archive.
+# Verified with Python 3.12.10 on Windows; compatible ranges remain in
+# pyproject.toml.
+numpy==2.4.6
+scipy==1.16.3
+pandas==2.3.3
+matplotlib==3.11.0
+PyYAML==6.0.2
+pyarrow==25.0.0
+
+# Development and verification tools:
+pytest==9.1.1
+ruff==0.16.6

@@ -1,0 +1,28 @@
+{
+  "protocol": "gl-tri-outcome-lean-v1",
+  "seed": 202609180076,
+  "runner_authority": "scripts/run_outcome_simulations.py command-line defaults and constants",
+  "replications": 1000,
+  "sentinel_replications": 100,
+  "historical_sources": 3,
+  "current_target_information": 100,
+  "historical_target_information": [120, 80, 50],
+  "delta_clin": 0.25,
+  "outcomes": ["continuous", "binary", "survival"],
+  "primary_methods": ["NIP", "PP", "rMAP", "CP", "UIP", "rUIP"],
+  "ablation_methods": ["rUIP no-local", "rUIP no-global"],
+  "scenarios": [
+    {"id": "GW-LW-0", "global_conflict": "weak", "local_conflict": "weak", "delta": 0.0, "u": [0.0, 0.0, 0.0]},
+    {"id": "GW-LW-D", "global_conflict": "weak", "local_conflict": "weak", "delta": 0.1, "u": [0.0, 0.0, 0.0]},
+    {"id": "GS-LW-P", "global_conflict": "strong", "local_conflict": "weak", "delta": 0.35, "u": [0.0, 0.0, 0.0]},
+    {"id": "GS-LW-N", "global_conflict": "strong", "local_conflict": "weak", "delta": -0.35, "u": [0.0, 0.0, 0.0]},
+    {"id": "GW-LS-I", "global_conflict": "weak", "local_conflict": "strong", "delta": 0.0, "u": [0.45, -0.225, -0.225]},
+    {"id": "GS-LS-I", "global_conflict": "strong", "local_conflict": "strong", "delta": 0.35, "u": [0.45, -0.225, -0.225]}
+  ],
+  "binary": {"current_probability": 0.4},
+  "survival": {"baseline_hazard_dgp_only": 1.0, "target_censoring_at_null": 0.3, "analysis": "Cox partial likelihood", "randomization": "1:1"},
+  "main_metrics": ["rmse", "coverage"],
+  "supplementary_metrics": ["bias", "interval_width", "mcse", "failure_count", "borrowed_precision", "source_weights"],
+  "paired_comparison": "squared_error_ruip_minus_comparator",
+  "current_data_used_in_prior": false
+}

@@ -1,0 +1,50 @@
+{
+  "protocol": "ruip-joint-transport-source-conflict-confirmation-v1",
+  "status": "post-review comparator-set revision; historical design and full results retained in external audit backup",
+  "sentinel_seed": 202609190901,
+  "formal_seed": 202609210921,
+  "replications": 1000,
+  "sentinel_replications": 100,
+  "outcomes": ["continuous", "binary", "survival"],
+  "current_target_information": 100.0,
+  "historical_target_information": [120.0, 80.0, 50.0],
+  "delta_clin": 0.25,
+  "target_region": {
+    "description": "Two reliable histories have parameter theta+s_g*g and one discordant history has theta+s_g*g+s_l*ell. The design fully crosses global and local signs for every (g,ell); the discordant source rotates deterministically by replicate within each cell. Thus g denotes the transport shift of the reliable historical cluster rather than the arithmetic mean of all histories.",
+    "continuous": {"global": [0.15, 0.25], "local": [0.45, 0.75]},
+    "binary": {"global": [0.15, 0.25], "local": [0.45, 0.75]},
+    "survival": {"global": [0.15, 0.25], "local": [0.45, 0.75]}
+  },
+  "guardrails": {
+    "compatible": {"global": 0.0, "local": 0.0},
+    "global_only": {"global": 0.30, "local": 0.0},
+    "local_only": {"global": 0.0, "local": 0.60},
+    "large_global_only": {"global": 0.50, "local": 0.0}
+  },
+  "methods": ["NIP", "PP", "rMAP", "CP", "UIP", "rUIP no-local", "rUIP no-global", "rUIP"],
+  "primary_region": "target",
+  "target_design": {
+    "global_signs": [-1, 1],
+    "local_signs": [-1, 1],
+    "discordant_source_rotation": "source = 1 + (replicate_id mod 3); every cell pools this prespecified mixture, with source counts differing by at most one when replications are not divisible by three",
+    "cells_per_outcome": 16
+  },
+  "analysis": {
+    "survival": "Cox partial likelihood; baseline hazard is used only to generate event times",
+    "paired": true,
+    "equal_weighting": "Each target scenario receives equal weight in pooled summaries",
+    "normalization_mass_discrepancy_tolerance": 0.0001,
+    "bootstrap_seed": 202609210922,
+    "bootstrap_replications": 5000,
+    "familywise_alpha": 0.05,
+    "coverage_point_interval": [0.94, 0.97],
+    "coverage_bonferroni_lower_minimum": 0.925,
+    "classic_methods": ["NIP", "PP", "rMAP", "CP", "UIP"],
+    "superiority_family": ["NIP", "PP", "rMAP", "CP", "UIP"],
+    "ablation_family": ["rUIP no-local", "rUIP no-global"],
+    "practical_mse_reduction_minimum": 0.05,
+    "headline_mse_reduction_target": 0.075,
+    "maximum_outcome_mse_ratio": 1.02,
+    "inference": "Within each outcome-by-scenario stratum, replicate identifiers are resampled with replacement and the same draw is used for every method. Scenarios and outcomes retain equal weight. One-sided paired normal-approximation p-values use stratified-bootstrap standard errors and are Holm-adjusted within the five-method superiority family and separately within the two-ablation family. Familywise one-sided upper confidence bounds use Bonferroni bootstrap quantiles. Coverage lower bounds are one-sided Wilson bounds with alpha/3."
+  }
+}

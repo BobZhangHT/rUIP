@@ -1,1 +1,0 @@
-PASS: no NaN/Inf, boundary, low-ESS, stuck-chain, or fit-failure flags

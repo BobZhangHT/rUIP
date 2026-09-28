@@ -1,27 +1,40 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "uip-ic"
+name = "ruip"
 version = "0.1.0"
-description = "Proof-of-concept Bayesian data augmentation for interval-censored PH models with a unit information prior"
+description = "Robust Unit Information Prior research software"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-  "matplotlib>=3.8",
-  "numpy>=1.26",
-  "pandas>=2.1",
-  "PyYAML>=6.0",
-  "scipy>=1.11",
+  "numpy>=2.0,<3",
+  "scipy>=1.11,<2",
+  "pandas>=2.0,<3",
+  "matplotlib>=3.8,<4",
+  "PyYAML>=6.0,<7",
+  "pyarrow>=14,<27",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8,<10", "ruff>=0.8,<1"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = ["-ra"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
